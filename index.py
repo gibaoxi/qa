@@ -1,365 +1,91 @@
-#coding:utf-8
-'''
-@author: ZainCheung
-@LastEditors: ZainCheung
-@description:网易云音乐全自动每日打卡云函数版
-@Date: 2020-06-25 14:28:48
-@LastEditTime: 2020-09-01 18:20:00
-'''
-from configparser import ConfigParser
-from threading import Timer
-import requests
-import random
-import hashlib
-import datetime
-import time
-import json
-import logging
-import math
-
-logger = logging.getLogger()
-grade = [10,40,70,130,200,400,1000,3000,8000,20000]
-api = ''
-
-class Task(object):
-
-    '''
-    对象的构造函数
-    '''
-    def __init__(self, uin, pwd, pushmethod, sckey, appToken, wxpusheruid, barkServer, barkKey, countrycode):
-        self.uin = uin
-        self.pwd = pwd
-        self.countrycode = countrycode
-        self.pushmethod = pushmethod
-        self.sckey = sckey
-        self.appToken = appToken
-        self.wxpusheruid = wxpusheruid
-        self.barkServer = barkServer
-        if barkServer == "":
-            self.barkServer = "https://api.day.app"
-        self.barkKey = barkKey
-    '''
-    带上用户的cookie去发送数据
-    url:完整的URL路径
-    postJson:要以post方式发送的数据
-    返回response
-    '''
-    def getResponse(self, url, postJson):
-        response = requests.post(url, data=postJson, headers={'Content-Type':'application/x-www-form-urlencoded'},cookies=self.cookies)
-        return response
-
-    '''
-    登录
-    '''
-    def login(self):
-        data = {"uin":self.uin,"pwd":self.pwd,"countrycode":self.countrycode,"r":random.random()}
-        if '@' in self.uin:
-            url = api + '?do=email'
-        else:
-            url = api + '?do=login'
-        response = requests.post(url, data=data, headers={'Content-Type':'application/x-www-form-urlencoded'})
-        code = json.loads(response.text)['code']
-        self.name = json.loads(response.text)['profile']['nickname']
-        self.uid = json.loads(response.text)['account']['id']
-        if code==200:
-            self.error = ''
-        else:
-            self.error = '登录失败，请检查账号'
-        self.cookies = response.cookies.get_dict()
-        self.log('登录成功')
-
-    '''
-    每日签到
-    '''
-    def sign(self):
-        url = api + '?do=sign'
-        response = self.getResponse(url, {"r":random.random()})
-        data = json.loads(response.text)
-        if data['code'] == 200:
-            self.log('签到成功')
-        else:
-            self.log('重复签到')
-
-    '''
-    每日打卡300首歌
-    '''
-    def daka(self):
-        url = api + '?do=daka'
-        response = self.getResponse(url, {"r":random.random()})
-        self.log(response.text)
-
-    '''
-    查询用户详情
-    '''
-    def detail(self):
-        url = api + '?do=detail'
-        data = {"uid":self.uid, "r":random.random()}
-        response = self.getResponse(url, data)
-        data = json.loads(response.text)
-        self.level = data['level']
-        self.listenSongs = data['listenSongs']
-        self.log('获取用户详情成功')
-
-    '''
-    Wxpusher推送
-    '''
-    def wxpusher(self):
-        if self.appToken == '' or self.wxpusheruid == '':
-            self.log('未填写WxPusher推送所需参数，请检查')
-            return
-        self.diyText() # 构造发送内容
-        url = 'https://wxpusher.zjiecode.com/api/send/message/'
-        data = json.dumps({
-            "appToken":self.appToken,
-            "content":self.content,
-            "summary":self.title,
-            "contentType":3,
-            "uids":[self.wxpusheruid]
-        })
-        response = requests.post(url, data = data, headers = {'Content-Type': 'application/json;charset=UTF-8'})
-        if (response.json()['data'][0]['status']) == '创建发送任务成功':
-            self.log('用户:' + self.name + '  WxPusher推送成功')
-        else:
-            self.log('用户:' + self.name + '  WxPusher推送失败,请检查appToken和uid是否正确')
-
-    '''
-    Bark推送
-    '''
-    def bark(self):
-        if self.barkServer == '' or self.barkKey == '':
-            self.log('未填写Bark推送所需参数，请检查')
-            return
-        self.diyText()  # 构造发送内容
-        url = self.barkServer+'/push'
-        data = json.dumps({
-            "title": self.title,
-            "body": self.content,
-            "device_key": self.barkKey,
-            "ext_params": {"group": "网易云签到"}
-        })
-        response = requests.post(url, data=data, headers={'Content-Type': 'application/json;charset=UTF-8'})
-        if (response.json()['message']) == 'success':
-            self.log('用户:' + self.name + '  Bark推送成功')
-        else:
-            self.log('用户:' + self.name + '  bark推送失败,请检查appToken和uid是否正确')
-
-    '''
-    自定义要推送到微信的内容
-    title:消息的标题
-    content:消息的内容,支持MarkDown格式
-    contentType:消息类型,1为普通文本,2为html,3为markdown
-    '''
-
-    '''
-    Server推送
-    '''
-    def server(self):
-        if self.sckey == '':
-            return
-        self.diyText()  # 构造发送内容
-        data = {
-            "text" : self.title,
-            "desp" : self.content
-        }
-        if self.pushmethod.lower() == 'scturbo':      #Server酱 Turbo版
-            url = 'https://sctapi.ftqq.com/' + self.sckey + '.send'
-            response = requests.post(url, data=data, headers = {'Content-type': 'application/x-www-form-urlencoded'})
-            errno = response.json()['data']['errno']
-        else:                                           #Server酱 普通版
-            url = 'https://sct.ftqq.com/' + self.sckey + '.send'
-            response = requests.post(url, data=data, headers = {'Content-type': 'application/x-www-form-urlencoded'})
-            errno = response.json()['errno']
-        if errno == 0:
-            self.log('用户:' + self.name + '  Server酱推送成功')
-        else:
-            self.log('用户:' + self.name + '  Server酱推送失败,请检查sckey是否正确')
-
-    '''
-    自定义要推送到微信的内容
-    title:消息的标题
-    content:消息的内容,支持MarkDown格式
-    '''
-
-    def diyText(self):
-        # today = datetime.date.today()
-        # kaoyan_day = datetime.date(2020,12,21) #2021考研党的末日
-        # date = (kaoyan_day - today).days
-        for count in grade:
-            if self.level < 10:
-                if self.listenSongs < 20000:
-                    if self.listenSongs < count:
-                        self.tip = '还需听歌' + str(count-self.listenSongs) + '首即可升级'
-                        break
-                else:
-                    self.tip = '你已经听够20000首歌曲,如果登录天数达到800天即可满级'
-            else:
-                self.tip = '恭喜你已经满级!'
-        if self.error == '':
-            state = ("- 目前已完成签到\n"
-                    "- 今日共打卡" + str(self.dakanum) + "次\n"
-                    "- 今日共播放" + str(self.dakaSongs) + "首歌\n"
-                    "- 还需要打卡" + str(self.day) +"天")
-            self.title = ("网易云今日打卡" + str(self.dakaSongs) + "首，已播放" + str(self.listenSongs) + "首")
-        else:
-            state = self.error
-            self.title = '网易云听歌任务出现问题！'
-        self.content = (
-            "------\n"
-            "#### 账户信息\n"
-            "- 用户名称：" + str(self.name) + "\n"
-            "- 当前等级：" + str(self.level) + "级\n"
-            "- 累计播放：" + str(self.listenSongs) + "首\n"
-            "- 升级提示：" + self.tip + "\n\n"
-            "------\n"
-            "#### 任务状态\n" + str(state) + "\n\n"
-            "------\n"
-            "#### 打卡日志\n" + self.dakaSongs_list + "\n\n")
-
-    '''
-    打印日志
-    '''
-    def log(self, text):
-        time_stamp = datetime.datetime.now()
-        print(time_stamp.strftime('%Y.%m.%d-%H:%M:%S') + '   ' + str(text))
-        self.time =time_stamp.strftime('%H:%M:%S')
-        self.list.append("- [" + self.time + "]  " + str(text) + "\n\n")
-
-    '''
-    开始执行
-    '''
-    def start(self):
-        try:
-            self.list = []
-            self.list.append("- 初始化完成\n\n")
-            self.login()
-            self.sign()
-            self.detail()
-            counter  = self.listenSongs
-            for i in range(1, 10):
-                self.daka()
-                #self.log('用户:' + self.name + '  第' + str(i) + '次打卡成功,即将休眠10秒')
-                self.log('第' + str(i) + '次打卡成功,即将休眠10秒')
-                time.sleep(10)
-                self.dakanum = i
-                self.detail()
-                self.dakaSongs = self.listenSongs - counter
-                self.log('今日已打卡播放' + str(self.dakaSongs) + '首')
-                if self.dakaSongs == 300:
-                    break
-            if self.listenSongs >= 20000:
-                self.day = 0
-            else:
-                self.day = math.ceil((20000 - self.listenSongs)/300)
-            self.list.append("- 打卡结束，消息推送\n\n")
-            self.dakaSongs_list = ''.join(self.list)
-            if self.pushmethod.lower() == 'wxpusher':
-                self.wxpusher()
-            elif self.pushmethod.lower() == 'bark':
-                self.bark()
-            else:
-                self.server()
-        except:
-            self.log('用户任务执行中断,请检查账号密码是否正确')
-        else:
-            self.log('用户:' + self.name + '  今日任务已完成')
+﻿import requests#10-9
 
 
-'''
-初始化：读取配置,配置文件为init.config
-返回字典类型的配置对象
-'''
-def init():
-    global api # 初始化时设置api
-    config = ConfigParser()
-    config.read('init.config', encoding='UTF-8-sig')
-    uin = config['token']['account']
-    pwd = config['token']['password']
-    countrycode = config['token']['countrycode']
-    api = config['setting']['api']
-    md5Switch = config.getboolean('setting','md5Switch')
-    peopleSwitch = config.getboolean('setting','peopleSwitch')
-    pushmethod = config['setting']['pushmethod']
-    sckey = config['setting']['sckey']
-    appToken = config['setting']['appToken']
-    wxpusheruid = config['setting']['wxpusheruid']
-    barkServer = config['setting']['barkServer']
-    barkKey = config['setting']['barkKey']
-    logger.info('配置文件读取完毕')
-    conf = {
-            'uin': uin,
-            'pwd': pwd,
-            'countrycode': countrycode,
-            'api': api,
-            'md5Switch': md5Switch,
-            'peopleSwitch':peopleSwitch,
-            'pushmethod':pushmethod,
-            'sckey':sckey,
-            'appToken':appToken,
-            'wxpusheruid':wxpusheruid,
-            'barkServer':barkServer,
-            'barkKey':barkKey
-        }
-    return conf
+url1="https://music.163.com/weapi/user/level?csrf_token=a4dbd8dedde42e9cea293434b3544369";
 
-'''
-MD5加密
-str:待加密字符
-返回加密后的字符
-'''
-def md5(str):
-    hl = hashlib.md5()
-    hl.update(str.encode(encoding='utf-8'))
-    return hl.hexdigest()
+data1='params=QRUrzYLu3bjp%2FVbGVikd3LhS%2FmUJ2Zxnkv8eNp7kw2qENYW3E8dURviEcynl9l7UMV2yDfrPFPduV0YaUuH6HyGC9H72g75xjEdvSxhnfp7vRyPHtwJR0aBEIrAfS8mW&encSecKey=2f92afcca5689bfe9dfa38922bb7154768bfc1dded83b88b6d4bc8645f81835b491553be6db2e3c25bdc4fe510e9ce63853dd57459bc056aa8129091fe2727371729ab208e1f197907e3f1b403d6585d9eb760a84836b5de49347dd9f305bc2be5519acf713917f948f6e12e3e4acfc5497c5b936827237b673b4ca75800129a'
 
-'''
-加载Json文件
-jsonPath:json文件的名字,例如account.json
-'''
-def loadJson(jsonPath):
-    with open(jsonPath,encoding='utf-8') as f:
-        account = json.load(f)
-    return account
 
-'''
-检查api
-'''
-def check():
-    url = api + '?do=check'
-    respones = requests.get(url)
-    if respones.status_code == 200:
-        logger.info('api测试正常')
-    else:
-        logger.error('api测试异常')
+headers1={
+    "host":"music.163.com", 
+"Content-Type": "application/x-www-form-urlencoded",
+"content-length": "418",
+"accept": "*/*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Safari/537.36",
 
-'''
-任务池
-'''
-def taskPool():
+"accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
 
-    config = init()
-    check() # 每天对api做一次检查
-    if config['peopleSwitch'] is True:
-        logger.info('多人开关已打开,即将执行进行多人任务')
-        account = loadJson("account.json")
-        for man in account:
-            logger.info('账号: ' + man['account'] + '  开始执行\n========================================')
-            task = Task(man['account'], man['password'], man['pushmethod'], man['sckey'], man['appToken'], man['wxpusheruid'], man['barkServer'], man['barkKey'], man['countrycode'])
-            task.start()
-            time.sleep(10)
-        logger.info('所有账号已全部完成任务,服务进入休眠中,等待明天重新启动')
-    else :
-        logger.info('账号: ' + config['uin'] + '  开始执行\n========================================')
-        if config['md5Switch'] is True:
-            logger.info('MD5开关已打开,即将开始为你加密,密码不会上传至服务器,请知悉')
-            config['pwd'] = md5(config['pwd'])
-        task = Task(config['uin'], config['pwd'], config['pushmethod'], config['sckey'], config['appToken'], config['wxpusheruid'], config['barkServer'], config['barkKey'], config['countrycode'])
-        task.start()
+    "Sec-Fetch-Mode": "cors",
 
-'''
-程序的入口
-'''
-def main(event,content):
-    taskPool()
+"Sec-Fetch-Site": "same-origin",
 
-if __name__ == '__main__':
-    taskPool()
+"Sec-Fetch-Dest": "empty",
+
+
+
+     "origin": "https://music.163.com",    
+
+"referer": "https://music.163.com/user/level", 
+
+            "Accept-Encoding": "gzip,deflate","cookie":"NMTID=00OFmY0US6eHKWanUnpoZrdTuDiQSIAAAGKPqhSqg;JSESSIONID-WYYY=RK%5CmmuoiVMT4%2BCb6WEg6jMVBK8tX%2Bs6aVeM1ymsncVcGd%2F%2F6eNe2DiF2n8j2VZhR326lVnWitWD%2FeGSUjmDvWHV4nVoUoHycDJ%5C%2F1HYGcq8Bs8eUoIna52rwBb%5CYWMeGilb%2FOZzmmjeMm4DhAHcJ7cHUQ9zxRizPfSwy7V%2F%5CuGsDDyyF%3A1693270132942;_iuqxldmzr_=32;_ntes_nnid=53af5fa8e96f8133690010d1ee0d9126,1693268333257;_ntes_nuid=53af5fa8e96f8133690010d1ee0d9126;WEVNSM=1.0.0;WNMCID=offpwe.1693268334629.01.0;ntes_utid=tid._.4fVbP5C4GUZBFhVUBReBiEu4jIDRSIiT._.0;sDeviceId=YD-F0HWXqUzECxBAxVRQEeQnRv4mdXFWJzC;__snaker__id=dVFmpovj4UqrmHnE;WM_NI=%2BqpEqSJ5TME2k5sKq%2BVksa5v%2Bg0eQGnXtgdo3H%2B8uSrgX5SutHvhGy9vh2VbmjkZniPCaeZ5AYxj5mS8NIzV5c8UtZYruPvtNDkVA2s4F28gSQ1UOwZskxE9gZnb%2Bfd6TDI%3D;WM_NIKE=9ca17ae2e6ffcda170e2e6ee8ab24a90e9a19afc5ea3928bb6c45b828e9f83c56386eaa1d4c94482edbbb4f42af0fea7c3b92ae9afc0a6f4598aeb9caec83aa9ebbdacf42196b5bd82b87ee9b90086d44dae88bc88e765f198e5d9f859b2b998d6d27fb898ba89c673fbaaa8d3d56aafb6a5bbed63949daf86d93f8387b88bb86791e882aaf95ef7bdf8b6f7529baebbb1f5808e9ca5b7c43ab1ec8ad3bb6d918fffb6ce7d9aada599c833a586a283aa6ea8ea9ca5cc37e2a3;WM_TID=WNu2w4tnItVAUURAVROB3BrpiIGUnrD7;gdxidpyhxdE=klh%5CEVTykYIXtw3%5CvgsEaOAEHG3YK5%2Fe0XdZ%2F4zz88B%5Cl%2FRCgqrHKCzZ7%2FgOxyyabcVAXpdsDT%2F5KQV%5C8EAqZshpZ069AKg5%2B82uKW0qmanMJt1sgMYe%5Cm1Mz%2BwyCQAr5PcoIMdcdr0w9T8YTOtRJEY2PDiXYaozbN8Mx8GX1aQgr5gs%3A1693269247868;YD00000558929251%3AWM_NI=n5Ykd%2FNT39ZMJ4P0REoS%2F7yml%2BQqci7uvs%2B%2Bm%2FKVYetAxlG%2FHxYcOuxxd1HR8w4AssT9MH3RWFLjEEDxxAHqrb4FasFc%2FbWqWsHeDt3hQ3wUehqQ6iexCpnGMgYgPrWzWkY%3D;YD00000558929251%3AWM_NIKE=9ca17ae2e6ffcda170e2e6eed8d84393a6a784f750f3868fb6c14e979b9badc56287aaf89ac9508c9bb8a2e12af0fea7c3b92aaeeb978ce7258e8cfddad9478aeca0d1d14fad8de1d8fc67b0f59f92e263f5abba94aa21aff185b7dc6fb89fb88dc6258ca89784ce7fbca8acd2cb5afca9fca2f27998e783a9b25a959a848bc84f88a8b8a2cb7bb2befca7e47986bde183d67b95ad8886c780f1b89fd4f65fa7b8bfb2b563a7a88d91ed4d8fb99788d37a95a6998cdc37e2a3;YD00000558929251%3AWM_TID=XHlkJtZ9v89FEUUQRBfQ2Er5mdSGEkBL;__remember_me=true;__csrf=a17aabaa24c3186c440e57a2bd816706;MUSIC_U=00477C46CE59BA8A71066254EBDEB5F174BB860D4E5206E246C87DBBF89D4704C70729CC90AB74435F189374C5D453567B818627D33E86CA250D554EFA3D12C328FBC9C7ACC8F96BB1DE8CA816B3F3253773F4CD8755F212179D017CC4E5098CBD66FE1F3EBB71A84CA49DD613E41186D3B10FAADB81826F01EC07678509E2E3C573B365BC5E6074CCF7DF77A4092428BC7E3612BC9576E10200563F97FCE53E82EE2B7B557FDF7945F18851914CEFBF185E48015B75DC89B7ADB8EA657BD980BD7B92C77EC5EE1BE50F7850B4E7603F2DC63A4F1FC311A80416537D04755D6A12384AAB393AF7650154C664244D696DE93188B57660F0F626DD5858684BA77C2FB8EA2928526EE3E6475DC8E21E77DA6199966C49736017D56FB2B5369FE53D51EC06EBD98D078A11B45A934186624373A5098705B895F696CB3DB6412FB424468044EF75A734DB8A986BB163177992CB3E1637DEE249B41BB823CE9CEF8DC932;ntes_kaola_ad=1;"
+
+}
+
+
+
+headers3={
+            "Content-Type":"application/x-www-form-urlencoded; charset=UTF-8",
+            "Cache-Control": 'no-cache',
+"User-Agent": "Mozilla/5.0 (Linux; Android 7.0; SLA-AL00 Build/HUAWEISLA-AL00; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/78.0.3904.62 XWEB/2898 MMWEBSDK/191102 Mobile Safari/537.36 MMWEBID/4984 MicroMessenger/7.0.9.1560(0x27000933) Process/tools NetType/WIFI Language/zh_CN ABI/arm32",
+            "accept": "*/*",
+            "connection": "Keep-Alive",
+            "Accept-Encoding": "gzip,deflate",
+"origin": "https://prodev.m.jd.com",
+"cookie":"__jdc=123;mba_muid=16656250288711537561796;shshshfpb=jZWYM7fsK_oOaAVpf1hAFMQ;shshshfpa=f7dfe904-13eb-dadf-d735-e9b395f54063-1665625038;visitkey=39109935208295376;retina=1;webp=1;sc_width=360;fingerprint=198f6505b26e47babc312c32a237527c;deviceVersion=7.0.20.1781%280x27001438%29;deviceOS=android;deviceOSVersion=7.0;deviceName=WeiXin;appCode=msd95910c4;share_cpin=;share_open_id=;share_gpin=;shareChannel=;source_module=;erp=;rurl=https%3A%2F%2Fwqsh.jd.com%2Ffsqd_02%2Findex%2Findex.html%3Fptag%3D17005.2.140;TrackID=208ZkhONJuT_b_2gp3GAJ0ACJFH3EUiFCqROCxO5ap9eUraHR2hUD-EomrglwHW_zXfu5MQ7iTV9AMKFKC6MUTdkv4fUYIjTmJ93b3sr6FfIlDg-78Im0TmgZujES598gfe7nGftm2sSp0Z1IV_IvtmmwFaI3UWXorwgSdZ8_VQ;buy_uin=6243189844;jdpin=jd_MQpaTEVYUTcD;mcossmd=c5e7245eefdd843918c65946369a6f23;nickname_base64=;open_id=oTGnpnJNnYfeM8QCeYdyGIg5iACw;picture_url=;pin=jd_MQpaTEVYUTcD;pinId=XGISOrPMzFweTFlcwCs_4Q;pinsign=22ed8529b51ded49733c0b2c89cf4048;sex=0;wq_skey=za2B103486161F0F5D80F66755827E23B8500810176E2BD00C9709DF22C82C809A5D945208D283E3CCAED86C56ADA51791989C478BA9B85E6F28AB3BC9B064962FB36528AC6EF4410F5D0F59C72E2532AF;wq_uin=6243189844;wq_unionid=oCwKwuCXZzs9KeB2CucYG0rwWJUY;wx_nickname=jd_user;unpl=JF8EAKdnNSttCBwDUE9WHRcUSV9UW1QOSx4BPDAHBA4LTFRXHwZJGhB7XlVdXhRLFh9vYBRUW1NKVA4fAysSE3tdVV9cAUMSAGphNWRaWEIZRElPKxEQe11Vbl0PTBMEbGMEV1RRTVQFHwAdFhdLW1xZbThMFwpfVzVWX19IUjUaMhsXGEhaUl9eC0InSAFmSFRaX09TBh8DGBsZTV1UWl8OTxADaW8CZFxoSA;openid2=2A1456B73D51B6193A311180F8D93327B2AD08EB51F7D9FE1C8EC284C837B2BBD71EE8A7E6DE4464D3D5611236935A1E;wxa_level=1;jxsid=16663133734199468141;__jdv=68990090%7Cweixin%7Ct_1000072662_17005_001%7Cweixin%7C-%7C1666313374925;PPRD_P=LOGID.1666312882491.1890971811-UUID.16663127024471338252831-EA.17005.2.140;shshshfp=1c8544c05a7110052711f4e25c5799b0;__jda=123.16656250288711537561796.1665625028.1666313374.1666316751.11;cid=9;__jxjda=68990090.1665910894731561532902.1665910894.1666312709.1666316769.3;jxsid_s_u=https%3A//home.m.jd.com/myJd/newhome.action;network=wifi;equipmentId=CRE356AGHD3SDWHLBTVYDODZAV2A4ZWDWFEQ73KIVBDSSRMEJATNUEWFZ2FKWYZP77RLAZDODJSF7P6ODAOJDZGVQM;TrackerID=QawgMVGLmIxQIl1ssPaTaIFecBDQnEz6Rlc9WiHCOUiqqYW8nNCY4dCHxa2CHED1Nwf9G2PtuM8g2PSUj97OVTbQg2dG5-pImLSVuFcKX5ycn--WrUCipmckBmkgg9diaQefn0Me9WKbTVCQXJwukg;pt_key=AAJjUfnsADACMEAT8uZwhwXrblFCph_QDPBfmo8Oxn6skQxYefUoMoNM9oPI9e7vyrwyBVn9jjg;pt_pin=jd_MQpaTEVYUTcD;pt_token=6412otds;pwdt_id=jd_MQpaTEVYUTcD;sfstoken=tk01m76361b17a8sMXgzeDJ5ajJ3A481CET+/3I2Oag2ozbDuWyfhU0jmOF4jxv+Io4o3ZsTcT5N0y+JllQWJCRi+Rcc;__wga=1666316784968.1666316769685.1666312886862.1665625050126.2.6;jxsid_s_t=1666316785423;shshshsID=550c09516d8737a620f326a76be7f29f_2_1666316786210;wqmnx1=MDEyNjM3MnQuL3Z4NjM4OTI3bCggZFMwL1MwQWI3SGlrczBlMyA4RTBvYTNNOGNlLjc3KXNzaDN5SWFDYTRZZi00WUQjKEg%3D;__jdb=123.6.16656250288711537561796|11.1666316751;mba_sid=16663167511236267735635829486.4;__jd_ref_cls=MCommonBottom_My;"
+
+      
+            }
+
+
+headers4={
+         "host":"music.163.com",
+
+            "upgrade-insecure-requests":"1 ",
+
+            "User-Agent": "Mozilla/5.0 (Linux; Android 9; JKM-AL00 Build/HUAWEIJKM-AL00; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/86.0.4240.99 XWEB/3262 MMWEBSDK/201201 Mobile Safari/537.36 MMWEBID/3993 MicroMessenger/8.0.1840(0x28000036) Process/toolsmp WeChat/arm32 Weixin NetType/WIFI Language/zh_CN ABI/arm64",
+
+
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            
+            "Accept-Encoding": "gzip,deflate",
+
+"Sec-Fetch-Mode": "navigate",
+
+"Sec-Fetch-Site": "same-origin",
+
+"Sec-Fetch-Dest": "iframe",
+
+
+"sec-fetch-user": "?1",
+
+
+"accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+"cookie":"WEVNSM=1.0.0;WNMCID=lqbped.1681524657589.01.0;NMTID=00ONfgdaXT8mIs9akzjp886pdXtcekAAAGHgq4BRw;JSESSIONID-WYYY=2AZ0AhFUKIB45zZMHu6diDBHJEjDsu%2Bowuv73cGxJ%2BiwIXXNAd%2B%5C8x%2BHpYQc42%2Fwi0Z%5CM%2BFUgtm%2B%2FRPKiwuKZu3k%5C9%2Bv5kh4ldIw9TjdzPvYoQ%2BJM8AhYMjtWkna%5Cvb2N%2BqPvA4kXj%2FnKUdR90PRgvr8WjDfcyABkwAJ8bUPMVQxdqkZ%3A1681526457663;_iuqxldmzr_=33;_ntes_nnid=c39b4fac45b11677590726cf23095a60,1681524657808;_ntes_nuid=c39b4fac45b11677590726cf23095a60;WM_NI=TL6j%2BIO8k2GDDpdBxPN1AzKEQBfZyDDLZuqA%2FaKuG4AkItOaQVyiXgK9OZmSG55PWD4Xd%2BsgWFERKW1HPo5qeKdy7fLxWTdTXkZ%2BQ3HABWBJD6PV9E85rb2AkU5MzFUVaDU%3D;WM_NIKE=9ca17ae2e6ffcda170e2e6eeafbc3a95b0fc83db64989a8ba2d55f929f9e86c16af89a86d3e56495ae88a2cb2af0fea7c3b92a9894fa8baa438de8a5d3c65088b0aca3fb5c8eef8f9bca4f939eaabbfc5088949696f44bedbf8596c64083b58795ce6b938ab78adb6d89e781bbf05985ebfbb1d650f888acccf26d959a8bb3ca5df398a090b87ba795ac9ab66e90a899b5e7609cb596ccd4398c9f8eb8c14288eaa0b7bc4ffcebbe83b14ba98bfbaef94e978aafa5d837e2a3;WM_TID=D7ujTHoVYGREARFRBAbQLpEdza1X8W3N;__snaker__id=C68oHEdkuzgHFQBW;gdxidpyhxdE=58kPdPuJakXSyn%5CentsHm7gn1vV%2Bd%5C7ejelWWES6SxHYq%5CE4plyX53aZJnzqkr3vh95N2T6Dev06ZtDlHm91p%2FWBlH2hJKGyeo9Xq5tKm8pqDI1i97IIPAHRaGZmaXX1wLkuyE7KY7ug3sh7U%2FK%2BvLz%5C7Sge%5Cj%2BTYWkdlOe2hqyjOE8A%3A1681525573124;YD00000558929251%3AWM_NI=H%2B1kRgOQ5f77Onah9N4gofqFed0jHu8KO8%2Ffj94tB%2F8fjsyLhvMgCfOqt2mobz4vyw1mn7PBxTqQQMZyG07F3kHIBNyo1OQfRtN0sOvbAE99wU5Xi%2B%2B5%2FpJhLktpyhGbYW8%3D;YD00000558929251%3AWM_NIKE=9ca17ae2e6ffcda170e2e6eeb0d83991f198d2c46ea1b08ea6c54e878a9b87c86bfb9fac8bca7d89f5bc8fed2af0fea7c3b92a8cf5ff8cd16d8d8ffb87b63d8db2af89bc46f8b9a187f44ea7bc008bcb7ffc9581d9ae6eaae7fc95c125fcbaa694fc48acaa8388c26e8dafbcd3f065a2a6fc97fc7df3b3a2d8d34abc8cbfb2d4479aa789d1b64ef1b588aac146bbb1ffb0d46e92ac82d1f245b6be8fa6bc33b58bfbb9ec21e9ebe191c96490b5bc91fc6485be97b8bb37e2a3;YD00000558929251%3AWM_TID=Bg98ZYGkUARBUEFBFULAPpVdyawP%2Bpzz;__csrf=e3b1a58b730053cc27bb895fabc9fe0c;__remember_me=true;MUSIC_U=207cefb9caf33ecb3f3df5092aca25cdeda48ce278e2b50a23753e8d32df73f1993166e004087dd3bc4b00e1707690e2edc0b299125e70cd989b2eba55c756ffb44b8fb6d645dcdfd4dbf082a8813684;ntes_kaola_ad=1;"
+
+}
+
+            
+response1= requests.post(url=url1,data=data1,headers=headers1)
+print(response1.text)
+
+
+
+
+def notice(content):
+    token ="c204e4622c9f4e3e8bf06591c7f6e89d"
+    title = "网易云cs"
+    url = f"http://www.pushplus.plus/send?token={token}&title={title}&content={content}&template=html"
+    response9=requests.request("GET", url)
+    print(response9.text)
+notice(response1.text)
+
