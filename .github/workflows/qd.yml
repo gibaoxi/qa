@@ -2,9 +2,9 @@ name: 网易云自动签到
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
   schedule:
     - cron: 0 22,6 * * *
   watch:
@@ -19,7 +19,7 @@ jobs:
       - name: 初始化Python
         uses: actions/setup-python@v3
         with:
-          python-version: 3.9
+          python-version: 3.6
       - name: 安装依赖
         run: |
           pip install -r requirements.txt
