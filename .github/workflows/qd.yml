@@ -19,7 +19,7 @@ jobs:
       - name: 初始化Python
         uses: actions/setup-python@v3
         with:
-          python-version: 3.6
+          python-version: 3.9
       - name: 安装依赖
         run: |
           pip install -r requirements.txt
