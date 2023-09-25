@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: 0 22,6 * * *
+    - cron: 0 14 * * *
   watch:
     types: started
 
@@ -23,9 +23,7 @@ jobs:
       - name: 安装依赖
         run: |
           pip install -r requirements.txt
-      - name: 检查环境
-        run: |
-          python3 index.py
+    
       - name: 开始尝试签到
         run: |
-          python3 main.py
+          python3 index.py
