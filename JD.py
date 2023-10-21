@@ -98,4 +98,24 @@ headers1={
            
     }
             
+response4= requests.post(url=url1, headers=headers4)
+print(response4.text)
+
+response3= requests.post(url=url5, headers=headers3)
+print(response3.text)
+
+response14= requests.post(url=url3, headers=headers1)
+print(response14.text)
+
+response13= requests.post(url=url4, headers=headers1)
+print(response13.text)
+
+
+def notice(content):
+    token ="c204e4622c9f4e3e8bf06591c7f6e89d"
+    title = "134"
+    url = f"http://www.pushplus.plus/send?token={token}&title={title}&content={content}&template=html"
+    response9=requests.request("GET", url)
+    print(response9.text)
+notice(response3.text+response4.text+response13.text+response14.text)
 
