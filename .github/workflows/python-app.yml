@@ -26,4 +26,4 @@ jobs:
     
       - name: 开始尝试签到
         run: |
-          python3 JD.py
+          python3 11.py
