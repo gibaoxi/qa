@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: '57 15 * * *'
+    - cron: '55 15 * * *'
   watch:
     types: started
 
@@ -27,3 +27,4 @@ jobs:
       - name: 53
         run: |
           python3 JX.py
+          python3 JD.py
