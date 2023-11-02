@@ -27,4 +27,4 @@ jobs:
       - name: 53
         run: |
           python3 JX.py
-          python3 JD.py
+          python3 JS.py
