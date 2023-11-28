@@ -112,7 +112,7 @@ print(response4.text)
 
 def notice(content):
     token ="c204e4622c9f4e3e8bf06591c7f6e89d"
-    title = "9-2"
+    title = "阿姨2"
     url = f"http://www.pushplus.plus/send?token={token}&title={title}&content={content}&template=html"
     response9=requests.request("GET", url)
     print(response9.text)
